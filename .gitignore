@@ -1,2 +1,7 @@
 *.o
 *.i
+*.dll
+*.lib
+*.obj
+*.exp
+*.bmp
