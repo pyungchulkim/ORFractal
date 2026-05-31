@@ -2,7 +2,7 @@
  * IT WILL CAUSE A PARSING ERROR.
  */
 corrected rotation: on
-z buffer: on
+z buffer: off
 concave polygons: on
 
 /* For some reason, the contour sides get trimmed at higher number

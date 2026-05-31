@@ -8,38 +8,57 @@
 ////////////////////////////////////////////////
 
 #define MAX_NODES 		4000	// # of nodes to stop simulation
-#define MAX_ITERATIONS 		40	// # of iteration stop simulation
-#define FOR_ORSTUDIO 		1	// for ORStudio input
+#define MAX_ITERATIONS 		5	// # of iteration stop simulation
+#define FOR_ORSTUDIO 		0	// for ORStudio input
 #define CONTOUR_SIDES 		128	// # of sides in a node contour
 #define SEED 			0	// 0 for no seed setting
 
 /* Growth types and flags - see description.txt for details */
-#define GT_2D_UNIFORM		1
-#define GT_2D_RANDOM		2
-#define FLAG_KEEP_ANGLE		0x01	// keep the turtle angle
+#define GT_2D			1	// grow in 2D
+#define F_RESERVED1		0x01
+#define F_UNIFORM		0x02	// uniform or random fanout (default)
+#define F_HEAD_KEEP		0x04	// head angle: keep the same as mother
+#define F_HEAD_RANDOM		0x08	// or random, or align (default)
+#define F_RESERVED2		0x10	// reserved
+#define F_RESERVED3		0x20	// reserved
 
 /* Genes for a node - dictates how it grows */
 typedef struct {		
 	int typeGrowth;		// type of node growth such as GROWTH_1
 	int idBaseShape;	// ID for the base contour (2D) or surface (3D) 
 	unsigned flags;		// bit flags 
-	float p1,p2,p3,p4,p5; 	// parameters - interpreted by growth type
+	float p1,p2,p3,p4,p5;	// parameters - interpreted by growth type
+	float p6,p7;
 } Genes;
 
 /* Genes defined. Parameters (p1,p2,...) for each growth types are as follows:
- * GT_2D_UNIFORM: prunRate, fanouts, angle, rotation, scaleFactor
- * GT_2D_RANDOM: prunRate, fanouts, angle, rotation, scaleFactor
+ * GT_2D: prun, fanouts, angle, rotation, scale, gap, color
  */
 Genes genes[] = {
-  /* 0 */ {GT_2D_RANDOM, 1, FLAG_KEEP_ANGLE, 0.5, 3, 120, 60, 1.0},
-  /* 1 */ {GT_2D_RANDOM, 2, FLAG_KEEP_ANGLE, 0.5, 3, 120, 60, 0.8},
-  /* 2 */ {GT_2D_RANDOM,  3, 0, 0.2, 3, 90, 45, 0.7}
+  /* 0 */ {GT_2D, 0, F_HEAD_KEEP, 0.5, 3, 150, 60, 0.8, 1.0, 0},
+  /* 1 */ {GT_2D, 1, F_HEAD_KEEP, 0.5, 3, 150, 60, 0.8, 0, 0},
+  /* 2 */ {GT_2D, 2, F_HEAD_KEEP, 0.5, 3, 150, 60, 0.8, 0, 0},
+  /* 3 */ {GT_2D, 4, F_UNIFORM, 0.0, 4, 120, 0, 0.4, -0.5, 0},
+  /* 4 */ {GT_2D, 3, 0, 0.2, 3, 90, 45, 0.7}
 };
 
-/* Seeding instruction - genes id and # of its seeds */
-#define SEEDING		Seeding(0, 50) \
-			Seeding(1, 50)
+/* Seeding instruction - genes id and # of its seeds within the range */
+#define SEEDING		Seeding(0, 0, 100, 400) \
+			Seeding(1, 0, 100, 400) \
+			Seeding(2, 0, 100, 400) \
+			Seeding(3, 3, 3000, 1000) \
+			Seeding(3, 10, 1000, 5000)
 
+#define SEED_COVERAGE	0.5
+
+/* Macros for genes parameters just for readability */
+#define P_PRUN_RATE	p1
+#define P_FANOUTS	p2
+#define P_ANGLE		p3
+#define P_ROTATION	p4
+#define P_SCALE_RATE	p5
+#define P_GAP_RATE	p6
+#define P_COLOR		p7
 
 #include <lpfgall.h>
 
@@ -88,16 +107,20 @@ typedef struct Node2D {
 	float color;		// color
 } Node2D;
 
-/* Contour data structure */
+/* Contour data structure - it holds all vertices and edges as well as
+ * the map to locate a vertex at a degree of [0, 360). Note that
+ * (1) the degree grows counter-clock wise from the top;
+ * (2) the edge vector is relative to its previous edge, assuming it started
+ *     at edges[0] with degree 0 (straight-up direction) 
+ */
 typedef struct {
 	V2f vertices[CONTOUR_SIDES];	// coordinates
 	V2f edges[CONTOUR_SIDES];	// edges: x=angle, y=distance
-	V2f topVertex;			// top vertex
-	V2f bottomVertex;		// bottom vertex
+	int angleToVertices[360];	// map from angle (int) to vertex id
 } Contour;
 
 /* production rules for LPFG */
-module Seeding(int, int);
+module Seeding(int, int, float, float);
 module GrowNode(NodeHandle);
 
 module Initialize();
@@ -108,6 +131,7 @@ module DrawCube(float, float, float);
 float gRandom(float mean, float sd);	// Gaussian dist random generator
 float uRandom(float range);		// Uniform dist random within [-range, range)
 V2f getContourCoord(int idContour, float angle); // get coordinate from a contour
+V2f rotateVector(V2f &vec, float degrees); // rotate a vector
 
 /////////////////////////////////////////////////////////////
 // Global variables
@@ -155,11 +179,12 @@ Axiom: 	Initialize() // Initialize data structures before production
 /* Seed initial nodes for the genes.
  *  gid 	- genes id 
  *  nSeeds 	- # of seeds to plant
+ *  scaleMin, scaleMax - the coverage from the center of the reference cube
  */
-Seeding(gid, nSeeds) : 
+Seeding(gid, nSeeds, scaleMin, scaleMax) : 
 {
   if (gid < 0 || gid >= DIM(genes)) {
-    Printf("No such genes with id=%d is defined.\n", gid);
+    Printf("Invalid gid: %d.\n", gid);
     Stop();
   }
 
@@ -168,40 +193,36 @@ Seeding(gid, nSeeds) :
   for (int i = 0; i < nSeeds; i++) {
     V3f center = V3f(0, CUBE_HEIGHT / 2, -CUBE_DEPTH / 2);
     V3f start;
-    float scale = 300 + uRandom(200);
-    float color;
+    float scale = scaleMin + ran(scaleMax - scaleMin);
 
     // Detemine the location and color of the seed node
     if (nodesCreated == 0) { // first one - put it at the vintage point
       start = center;
     } else {
-      start.x = center.x + uRandom(CUBE_WIDTH / 2);
-      start.y = center.y + uRandom(CUBE_HEIGHT / 2);
-      start.z = center.z + uRandom(CUBE_DEPTH / 2);
-    }
-    color = 160; // default color - brown
-    if (FOR_ORSTUDIO == 1) {  // use different colors for ORStudio
-      // skipping index 0 (reserved for background by LPFG) */
-      color = ran(MAX_COLORS) + 1; 
+      start.x = center.x + uRandom(CUBE_WIDTH / 2 * SEED_COVERAGE);
+      start.y = center.y + uRandom(CUBE_HEIGHT / 2 * SEED_COVERAGE);
+      start.z = center.z + uRandom(CUBE_DEPTH / 2 * SEED_COVERAGE);
     }
 
     // Allocate a node and populate the node specific info
     NodeHandle pNode = NULL;
 
     switch (pGenes->typeGrowth) {
-      case GT_2D_UNIFORM:
-      case GT_2D_RANDOM: {
+      case GT_2D:
+      {
 	Node2D *pn = new Node2D;
 	pn->header.id = nodesCreated++;
 	pn->header.birth = currIteration;
 	pn->header.pMother = NULL;
 	pn->header.gid = gid;
 	pn->start = start;
-	pn->direction.x = (pGenes->flags | FLAG_KEEP_ANGLE) ? 0 : ran(360);
-	pn->direction.y = uRandom(pGenes->p4);
+	pn->direction.x = (pGenes->flags & F_HEAD_KEEP) ? 0 : ran(360);
+	pn->direction.y = uRandom(pGenes->P_ROTATION);
 	pn->idContour = pGenes->idBaseShape;
 	pn->scale = scale;
-	pn->color = color;
+	pn->color = pGenes->P_COLOR;
+	if (pn->color == 0)	// unspecified. random pick
+	  pn->color = ran(MAX_COLORS) + 1;
 	pNode = pn;
 	break;
       }
@@ -222,7 +243,6 @@ Seeding(gid, nSeeds) :
 }
 
 /* Draw the current node and grow next nodes from it.
- *
  */
 GrowNode(pNode) :
 {
@@ -240,36 +260,28 @@ GrowNode(pNode) :
   // Grow the node according to the growth type
   switch (pGenes->typeGrowth) {
 
-    case GT_2D_UNIFORM:
-    case GT_2D_RANDOM: {	// See Overview for details of the growth rule
+    case GT_2D: {
 
       Node2D *pThis = (Node2D *)pNode;
 
       // pull out growth parameters specific to the growth types
-      float prunRate = pGenes->p1;
-      int nFanouts = pGenes->p2;
-      int angle = pGenes->p3;
-      float rotation = pGenes->p4;
-      float scaleFactor = pGenes->p5;
-      bool bKeepAngle = pGenes->flags | FLAG_KEEP_ANGLE;
+      float prunRate = pGenes->P_PRUN_RATE;
+      int nFanouts = pGenes->P_FANOUTS;
+      int angle = pGenes->P_ANGLE;
+      float rotation = pGenes->P_ROTATION;
+      float scaleRate = pGenes->P_SCALE_RATE;
 
       // Generate angles for fanouts
       float *fanouts = new float[nFanouts];
-      switch (pGenes->typeGrowth) {
-	case GT_2D_UNIFORM: {	// equally distribute at [-angle, angle]
-	  float curr = (nFanouts == 1) ? 0 : -angle;
-	  float delta = (nFanouts == 1) ? 360 : (2 * angle) / (nFanouts - 1);
-	  for (int i = 0; i < nFanouts; i++, curr += delta) {
-	    fanouts[i] = curr;
-	  }
-	  break;
+      if (pGenes->flags & F_UNIFORM) {	// equally distribute at [-angle, angle]
+	float curr = (nFanouts <= 1) ? 0 : -angle;
+	float delta = (nFanouts <= 1) ? 360 : (2 * angle) / (nFanouts - 1);
+	for (int i = 0; i < nFanouts; i++, curr += delta) {
+	  fanouts[i] = curr;
 	}
-	default:
-	case GT_2D_RANDOM: {	// randomly distribute at [-angle, angle]
-	  for (int i = 0; i < nFanouts; i++) {
-	    fanouts[i] = ran(2 * angle) - angle;
-	  }
-	  break;
+      } else {  // randomly distribute at [-angle, angle]
+	for (int i = 0; i < nFanouts; i++) {
+	  fanouts[i] = ran(2 * angle) - angle;
 	}
       }
 
@@ -278,19 +290,40 @@ GrowNode(pNode) :
 	if (ran(1.0) < prunRate)
 	  continue;	// prun (skip) it
 
-	// get the coordinate of the contour at the angle
-	V2f v = getContourCoord(pThis->idContour, fanouts[i]) * pThis->scale;
-
 	Node2D *pn = new Node2D;
 	pn->header.id = nodesCreated++;
 	pn->header.birth = currIteration;
 	pn->header.pMother = pThis;
 	pn->header.gid = gid;
-	pn->start = V3f(v.x, v.y, 0);
-	pn->direction = V2f((bKeepAngle) ? 0 : fanouts[i], uRandom(rotation));
+
+	// set the direction and rotation of the node
+	if (pGenes->flags & F_HEAD_KEEP)
+	  pn->direction.x = 0;	 // no change: head angle the same as mother
+	else if (pGenes->flags & F_HEAD_RANDOM)
+	  pn->direction.x = ran(360);	// head to random direction
+	else
+	  pn->direction.x = fanouts[i];	// head along the fanout angle
+	pn->direction.y = uRandom(rotation);
+
 	pn->idContour = pThis->idContour;
-	pn->scale = pThis->scale * (scaleFactor + uRandom(scaleFactor * 0.3));
-	pn->color = (pThis->color == MAX_COLORS) ? 1 : pThis->color + 1;
+	pn->scale = pThis->scale * (scaleRate + uRandom(scaleRate * 0.3));
+	pn->color = pGenes->P_COLOR;
+	if (pn->color == 0)	// unspecified. advance to the next color
+	  pn->color = (pThis->color == MAX_COLORS) ? 1 : pThis->color + 1;
+
+	// Calculate the center coordinate of the new node.
+	// The gap is distance between v1 and v2 where v1 is a vertex of
+	// mother node and v2 is a vertex of the new node, and the line
+	// connecting v1, v2 are the same line connecting the centers of the
+	// two nodes. The gap in general indicates the gap between
+	// the mother node and the new node contours.
+
+	V2f v1 = getContourCoord(pThis->idContour, fanouts[i]) * pThis->scale;
+	V2f v2 = v1 * (1 + pGenes->P_GAP_RATE);	// move by gap rate
+	float d2 = 180 + fanouts[i] - pn->direction.x;
+	V2f v3 = getContourCoord(pThis->idContour, d2) * pn->scale;
+	V2f vc = v2 - rotateVector(v3, pn->direction.x); // the center of the new node
+	pn->start = V3f(vc.x, vc.y, 0);
 
 	nproduce SB();
 	nproduce GrowNode(pn);
@@ -298,7 +331,7 @@ GrowNode(pNode) :
       }
       delete fanouts;
       break;
-    } // GT_2D_UNIFORM, GT_2D_RANDOM
+    } // GT_2D
 
     default: {
       Printf("THE GROWTH TYPE IS NOT IMPLEMENTED.\n");
@@ -337,41 +370,18 @@ Initialize() : {
     nproduce CurrentContour(cid);
     nproduce ContourSides(255);	// set the sides highest to read in
 
-    // find the bottom position of the contour
-    float topY = -1e9;
-    float bottomY = 1e9;
-    float topL = 0;
-    float bottomL = 0;
+    // Load and cache the contour vertices
     for (int s = 0; s < nSides; s++) {
       float t = (float)s / nSides;
       V2f v = curveXY(cid, t);
-      if (v.y > topY) {
-	topY = v.y;
-	topL = t;
-      }
-      if (v.y < bottomY) {
-	bottomY = v.y;
-	bottomL = t;
-      }
+      contours[i].vertices[s] = curveXY(cid, t);
     }
 
-    // topL/bottomL now has the arc length of top/bottom of the node contour.
-    contours[i].topVertex = curveXY(cid, topL);
-    contours[i].bottomVertex = curveXY(cid, bottomL);
-
-    // re-read and cache the contour vertices starting from the bottom
-    // and adjust the coordinates relative to the bottom
-    for (int s = 0; s < nSides; s++) {
-      float t = bottomL + (float)s / nSides;
-      if (t >= 1.0) t -= 1.0;	// circular
-      V2f v = curveXY(cid, t);
-      v -= contours[i].bottomVertex;	// relative to the bottom
-      contours[i].vertices[s] = v;
-    }
-
-    // populate node edges from the vertices so we can use turtle
+    // Populate node edges from the vertices so we can use turtle
     // (Left(a) f(l)) to draw the contour.
-    // note that f(l) is relative to the current direction/position.
+    // Note that f(l) is relative to the current direction/position.
+    // Also note that the edges needs to be plotted sequentially from
+    // 0-th edge with straight up turtle (90-degree in hypot() world).
     float pa = 90;		// previous angle relative to hypot()
     for (int s = 0; s < nSides; s++) {
       int ns = (s == nSides - 1) ? 0 : (s + 1); // next vertex index
@@ -381,7 +391,29 @@ Initialize() : {
       contours[i].edges[s].y = hypot(d.y, d.x);	// distance
       pa = a;
     }
-  }
+
+    // Populate angletoVertices for direct look up a vertice by angle later 
+    // Note that the angle grows counterclockwise from the top
+    float *angles = new float[nSides];
+    for (int s = 0; s < nSides; s++) {
+      V2f v = contours[i].vertices[s];
+      angles[s] = atan2(v.y, v.x) * (180.0 / M_PI); // angle in [-180, 180)
+      angles[s] -= 90;	// adjust it so the top is angle 0.
+    }
+    for (int a = 0; a < DIM(contours[i].angleToVertices); a++) {
+      // locate the vertex closest to angle a
+      float min = 1e9;
+      int mv = -1;
+      for (int s = 0; s < nSides; s++) {
+	float d = abs(fmod(angles[s] + 360.0, 360.0) - a);
+	if (d < min) {
+	  min = d;
+	  mv = s;
+	}
+      }
+      contours[i].angleToVertices[a] = mv;
+    }
+  } 
 
   produce EB();
 }
@@ -394,26 +426,30 @@ DrawNode(pNode) :
   // Draw the node according to the growth type
   switch (pGenes->typeGrowth) {
 
-    case GT_2D_UNIFORM:
-    case GT_2D_RANDOM: {	// Use contour to draw the shape
+    case GT_2D: {	// Use 2D contour to draw the shape
 
       Node2D *pThis = (Node2D *)pNode;
+      int ci = pThis->idContour;
 
-      // Make a directional relative move to the start position.
+      // Make a directional relative move to the new center position.
       nproduce Right(90) g(pThis->start.x)
 	       Left(90) g(pThis->start.y)
 	       Up(90) g(pThis->start.z)
 	       Up(-90);
 
-      // Set the direction and color.
+      // Set the direction and color
       nproduce Left(pThis->direction.x) RollR(pThis->direction.y)
 	       SetColor(pThis->color);
 
       // Start the polygon. Make sure the polygon to be enclosed in a block
-      // so the initial turtle direction remains unchanged.
+      // so the turtle center location and direction remain unchanged.
       nproduce SB() SP();
 
-      int ci = pThis->idContour;
+      // Move to the first (starting) vertex location.
+      V2f start = contours[ci].vertices[0] * pThis->scale;
+      nproduce Right(90) g(start.x) Left(90) g(start.y);
+
+      // Draw the contour lines
       int nSides = DIM(contours[ci].edges);
       for (int i = 0; i < nSides; i++) {
 	float l = contours[ci].edges[i].y * pThis->scale;
@@ -440,7 +476,7 @@ L(l) --> [&(90)@c] F(l) [&(90)@c]
 DrawCube(w,h,d) : 
 {
   if (FOR_ORSTUDIO != 1) {
-    nproduce SB()SetWidth(5)SetColor(255)
+    nproduce SB()SetWidth(5)SetColor(0)
 		 SB()MoveTo(w/2,0,0)F(h)Left(90)F(w)Left(90)F(h)Left(90)F(w)EB()
 		 SB()MoveTo(w/2,0,-d)F(h)Left(90)F(w)Left(90)F(h)Left(90)F(w)EB()
 		 SB()Down(90)MoveTo(-w/2,0,0)F(d)MoveTo(-w/2,h,0)F(d)MoveTo(w/2,h,0)F(d)MoveTo(w/2,0,0)F(d)EB()
@@ -475,21 +511,27 @@ float uRandom(float range)
 }
 
 /* Get the coordinate of the contour at the given angle.
- * LPFG contour interface only allows to get coordinate by arc length,
- * which is not exactly proportional to angle. However, I assume that
- * this is good approximation.
- * Also, note that the angle 0 indicates the top of the contour and
- * it grows counterclockwise while the contour array starts at the bottom of
- * the counter and grows clockwise.
  */
 V2f getContourCoord(int idContour, float angle)
 {
-  int nSides = DIM(contours[idContour].vertices);
-  angle += 180;	// adjust the angle to start at the bottome and counterclockwise 
-  int i = (int)(nSides * (1 - angle / 360)) - 1; // index of the vertex at the angle
-  
-  // Cap the index within the valid range
-  i = MIN(i, nSides - 1); i = MAX(i, 0);
-  return contours[idContour].vertices[i];
+  int ai = fmod(angle + 360.0, 360.0);  // map it to [0, 360)
+  int vi = contours[idContour].angleToVertices[ai];
+  return contours[idContour].vertices[vi];
 }
 
+/* Rotate a vector counterclockwise
+ */
+V2f rotateVector(V2f& vec, float degrees)
+{
+  // 1. Convert degrees to radians
+  float radians = degrees * (M_PI / 180.0);
+  float cosTheta = std::cos(radians);
+  float sinTheta = std::sin(radians);
+
+  // 2. Apply rotation formulas
+  V2f rotated;
+  rotated.x = vec.x * cosTheta - vec.y * sinTheta;
+  rotated.y = vec.x * sinTheta + vec.y * cosTheta;
+
+  return rotated;
+}
