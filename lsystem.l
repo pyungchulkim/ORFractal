@@ -8,7 +8,7 @@
 ////////////////////////////////////////////////
 
 #define MAX_NODES 		4000	// # of nodes to stop simulation
-#define MAX_ITERATIONS 		5	// # of iteration stop simulation
+#define MAX_ITERATIONS 		7	// # of iteration stop simulation
 #define FOR_ORSTUDIO 		0	// for ORStudio input
 #define CONTOUR_SIDES 		128	// # of sides in a node contour
 #define SEED 			0	// 0 for no seed setting
@@ -35,21 +35,35 @@ typedef struct {
  * GT_2D: prun, fanouts, angle, rotation, scale, gap, color
  */
 Genes genes[] = {
-  /* 0 */ {GT_2D, 0, F_HEAD_KEEP, 0.5, 3, 150, 60, 0.8, 1.0, 0},
-  /* 1 */ {GT_2D, 1, F_HEAD_KEEP, 0.5, 3, 150, 60, 0.8, 0, 0},
-  /* 2 */ {GT_2D, 2, F_HEAD_KEEP, 0.5, 3, 150, 60, 0.8, 0, 0},
-  /* 3 */ {GT_2D, 4, F_UNIFORM, 0.0, 4, 120, 0, 0.4, -0.5, 0},
+  /* 0 */ {GT_2D, 0, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.0, 0},
+  /* 1 */ {GT_2D, 1, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.9, 0.5, 0},
+  /* 1 */ {GT_2D, 2, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.9, 0.5, 0},
+  /* 2 */ {GT_2D, 3, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.9, 1, 0},
+  /* 2 */ {GT_2D, 4, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.9, 1, 0},
+  /* 3 */ {GT_2D, 5, F_HEAD_KEEP, 0.7, 2, 170, 40, 0.8, 1.0, 24},
+  /* 3 */ {GT_2D, 6, F_HEAD_KEEP, 0.7, 2, 170, 40, 0.8, 1.0, 24},
   /* 4 */ {GT_2D, 3, 0, 0.2, 3, 90, 45, 0.7}
 };
 
 /* Seeding instruction - genes id and # of its seeds within the range */
-#define SEEDING		Seeding(0, 0, 100, 400) \
-			Seeding(1, 0, 100, 400) \
-			Seeding(2, 0, 100, 400) \
-			Seeding(3, 3, 3000, 1000) \
-			Seeding(3, 10, 1000, 5000)
+#define SEEDING		\
+			Seeding(0, 3, 300, 800) \
+			Seeding(1, 3, 300, 800) \
+			Seeding(2, 3, 300, 800) \
+			Seeding(3, 3, 300, 800) \
+			Seeding(4, 3, 300, 800) \
+			Seeding(5, 3, 300, 800) \
+			Seeding(6, 3, 300, 800) \
+			Seeding(0, 3, 300, 800) \
+			Seeding(1, 3, 300, 800) \
+			Seeding(2, 3, 300, 800) \
+			Seeding(3, 3, 300, 800) \
+			Seeding(4, 3, 300, 800) \
+			Seeding(5, 3, 300, 800) \
+			Seeding(6, 3, 300, 800) \
+			Seeding(3, 0, 300, 800)
 
-#define SEED_COVERAGE	0.5
+#define SEED_COVERAGE	0.8
 
 /* Macros for genes parameters just for readability */
 #define P_PRUN_RATE	p1
@@ -319,7 +333,8 @@ GrowNode(pNode) :
 	// the mother node and the new node contours.
 
 	V2f v1 = getContourCoord(pThis->idContour, fanouts[i]) * pThis->scale;
-	V2f v2 = v1 * (1 + pGenes->P_GAP_RATE);	// move by gap rate
+	float gapRate = pGenes->P_GAP_RATE + uRandom(pGenes->P_GAP_RATE * 0.3);
+	V2f v2 = v1 * (1 + gapRate);	// move by gap rate
 	float d2 = 180 + fanouts[i] - pn->direction.x;
 	V2f v3 = getContourCoord(pThis->idContour, d2) * pn->scale;
 	V2f vc = v2 - rotateVector(v3, pn->direction.x); // the center of the new node
@@ -349,7 +364,7 @@ GrowNode(pNode) :
  * Having a query such as GetPos() at predecessor of a rule triggers
  * interpretation stage prior to production.
  */
-GetPos(x,y,z) : { }
+GetPos(x, y, z) : { }
 
 /* Rules to interpret the production to draw */
 
@@ -358,7 +373,8 @@ interpretation:
 /* Initialize the interpretation phase in terms of preparing
  * data structure to be re-used for other interpretation modules
  */
-Initialize() : {
+Initialize() : 
+{
 
   nproduce SB();
 
