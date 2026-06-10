@@ -3,15 +3,20 @@
  * https://orderedrandom.com
  */
 
+#include <lpfgall.h>
+#include <GL/gl.h>
+
 ////////////////////////////////////////////////
 // Control parameters to run the simulation
 ////////////////////////////////////////////////
 
 #define MAX_NODES 		4000	// # of nodes to stop simulation
-#define MAX_ITERATIONS 		7	// # of iteration stop simulation
+#define MAX_ITERATIONS 		4	// # of iteration stop simulation
 #define FOR_ORSTUDIO 		0	// for ORStudio input
 #define CONTOUR_SIDES 		128	// # of sides in a node contour
 #define SEED 			0	// 0 for no seed setting
+#define MODE_CONTOUR		0	// non-zero for contour-only drawing
+#define MODE_TRANSPARENT	1	// non-zero for transparent colors
 
 /* Growth types and flags - see description.txt for details */
 #define GT_2D			1	// grow in 2D
@@ -35,35 +40,22 @@ typedef struct {
  * GT_2D: prun, fanouts, angle, rotation, scale, gap, color
  */
 Genes genes[] = {
-  /* 0 */ {GT_2D, 0, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.0, 0},
-  /* 1 */ {GT_2D, 1, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.9, 0.5, 0},
-  /* 1 */ {GT_2D, 2, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.9, 0.5, 0},
-  /* 2 */ {GT_2D, 3, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.9, 1, 0},
-  /* 2 */ {GT_2D, 4, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.9, 1, 0},
-  /* 3 */ {GT_2D, 5, F_HEAD_KEEP, 0.7, 2, 170, 40, 0.8, 1.0, 24},
-  /* 3 */ {GT_2D, 6, F_HEAD_KEEP, 0.7, 2, 170, 40, 0.8, 1.0, 24},
-  /* 4 */ {GT_2D, 3, 0, 0.2, 3, 90, 45, 0.7}
+  /* 0 */ {GT_2D, 0, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 0.5, 0},
+  /* 1 */ {GT_2D, 1, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.5, 0},
+  /* 2 */ {GT_2D, 2, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.5, 0},
+  /* 3 */ {GT_2D, 3, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.0, 0},
+  /* 4 */ {GT_2D, 4, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.0, 0},
+  /* 5 */ {GT_2D, 5, F_HEAD_KEEP, 0.5, 3, 170, 40, 0.8, 1.5, 0},
+  /* 6 */ {GT_2D, 6, F_HEAD_KEEP, 0.5, 3, 170, 40, 0.8, 1.5, 0},
+  /* 7 */ {GT_2D, 3, 0, 0.2, 3, 90, 45, 0.7}
 };
 
 /* Seeding instruction - genes id and # of its seeds within the range */
 #define SEEDING		\
-			Seeding(0, 3, 300, 800) \
-			Seeding(1, 3, 300, 800) \
-			Seeding(2, 3, 300, 800) \
-			Seeding(3, 3, 300, 800) \
-			Seeding(4, 3, 300, 800) \
-			Seeding(5, 3, 300, 800) \
-			Seeding(6, 3, 300, 800) \
-			Seeding(0, 3, 300, 800) \
-			Seeding(1, 3, 300, 800) \
-			Seeding(2, 3, 300, 800) \
-			Seeding(3, 3, 300, 800) \
-			Seeding(4, 3, 300, 800) \
-			Seeding(5, 3, 300, 800) \
-			Seeding(6, 3, 300, 800) \
-			Seeding(3, 0, 300, 800)
+			Seeding(0, 0, 10, 300, 800) \
+			Seeding(0, 3, 10, 300, 800)
 
-#define SEED_COVERAGE	0.8
+#define SEED_COVERAGE	0.5
 
 /* Macros for genes parameters just for readability */
 #define P_PRUN_RATE	p1
@@ -73,8 +65,6 @@ Genes genes[] = {
 #define P_SCALE_RATE	p5
 #define P_GAP_RATE	p6
 #define P_COLOR		p7
-
-#include <lpfgall.h>
 
 ////////////////////////////////////////////////
 // Constants and macros
@@ -118,7 +108,7 @@ typedef struct Node2D {
 	V2f direction;		// direction: x=angle, y=rotation
 	int idContour;		// ID of the contour to be used
 	float scale;		// scaling
-	float color;		// color
+	int color;		// color
 } Node2D;
 
 /* Contour data structure - it holds all vertices and edges as well as
@@ -134,7 +124,7 @@ typedef struct {
 } Contour;
 
 /* production rules for LPFG */
-module Seeding(int, int, float, float);
+module Seeding(int, int, int, float, float);
 module GrowNode(NodeHandle);
 
 module Initialize();
@@ -155,6 +145,12 @@ int currIteration;		// current iteration number of the simulation
 int nodesCreated;		// # of nodes created so far
 int nodesCreatedLast;		// # of nodes created until the last iteration
 Contour contours[MAX_CONTOURS];	// contour coordinates cache
+
+/* OpenGL functions entry */
+extern "C" { __attribute__((__stdcall__)) void* wglGetProcAddress(const char*); }
+typedef void (__attribute__((__stdcall__)) *PFNGLBLENDEQUATIONPROC)(unsigned int mode);
+
+PFNGLBLENDEQUATIONPROC glBlendEquation = NULL;
 
 /////////////////////////////////////////////////////////////
 // LPFG Simulation codes
@@ -191,12 +187,15 @@ Axiom: 	Initialize() // Initialize data structures before production
 	SEEDING;
 
 /* Seed initial nodes for the genes.
+ *  startIter	- starting iteration (delay)
  *  gid 	- genes id 
  *  nSeeds 	- # of seeds to plant
  *  scaleMin, scaleMax - the coverage from the center of the reference cube
  */
-Seeding(gid, nSeeds, scaleMin, scaleMax) : 
+Seeding(startIter, gid, nSeeds, scaleMin, scaleMax) : 
 {
+  if (startIter > currIteration) return;	// wait until the starting iteration
+
   if (gid < 0 || gid >= DIM(genes)) {
     Printf("Invalid gid: %d.\n", gid);
     Stop();
@@ -370,11 +369,23 @@ GetPos(x, y, z) : { }
 
 interpretation:
 
-/* Initialize the interpretation phase in terms of preparing
- * data structure to be re-used for other interpretation modules
+/* Initialize the interpretation phase in terms of setting the environment
+ * and preparing data structure to be re-used for other interpretation modules
  */
 Initialize() : 
 {
+  // Use low-level OpenGL directly to set up blending mode
+  // to simulate pigment mixing when in the transparent mode.
+  if (MODE_TRANSPARENT) {
+    if (!glBlendEquation) {	// load glBlendEquation()
+      glBlendEquation = (PFNGLBLENDEQUATIONPROC)wglGetProcAddress("glBlendEquation");
+    }
+    if (glBlendEquation) {	// simulate pigment mixing
+      glEnable(GL_BLEND);
+      glBlendEquation(0x8006 /*=GL_FUNC_ADD*/);
+      glBlendFunc(GL_DST_COLOR, GL_ZERO);
+    }
+  }
 
   nproduce SB();
 
@@ -459,20 +470,32 @@ DrawNode(pNode) :
 
       // Start the polygon. Make sure the polygon to be enclosed in a block
       // so the turtle center location and direction remain unchanged.
-      nproduce SB() SP();
+      nproduce SB();
 
       // Move to the first (starting) vertex location.
       V2f start = contours[ci].vertices[0] * pThis->scale;
       nproduce Right(90) g(start.x) Left(90) g(start.y);
 
       // Draw the contour lines
-      int nSides = DIM(contours[ci].edges);
-      for (int i = 0; i < nSides; i++) {
-	float l = contours[ci].edges[i].y * pThis->scale;
-	nproduce Left(contours[ci].edges[i].x) f(l);
+      if (MODE_CONTOUR) {
+	nproduce SetWidth(5);
+	int nSides = DIM(contours[ci].edges);
+	for (int i = 0; i < nSides; i++) {
+	  float l = contours[ci].edges[i].y * pThis->scale;
+	  nproduce Left(contours[ci].edges[i].x) F(l);
+	}
+      }
+      else {
+	nproduce SP();
+	int nSides = DIM(contours[ci].edges);
+	for (int i = 0; i < nSides; i++) {
+	  float l = contours[ci].edges[i].y * pThis->scale;
+	  nproduce Left(contours[ci].edges[i].x) f(l);
+	}
+	nproduce EP();
       }
 
-      produce EP() EB();
+      produce EB();
       break;
     }
 
@@ -492,7 +515,7 @@ L(l) --> [&(90)@c] F(l) [&(90)@c]
 DrawCube(w,h,d) : 
 {
   if (FOR_ORSTUDIO != 1) {
-    nproduce SB()SetWidth(5)SetColor(0)
+    nproduce SB()SetWidth(5)SetColor(15)
 		 SB()MoveTo(w/2,0,0)F(h)Left(90)F(w)Left(90)F(h)Left(90)F(w)EB()
 		 SB()MoveTo(w/2,0,-d)F(h)Left(90)F(w)Left(90)F(h)Left(90)F(w)EB()
 		 SB()Down(90)MoveTo(-w/2,0,0)F(d)MoveTo(-w/2,h,0)F(d)MoveTo(w/2,h,0)F(d)MoveTo(w/2,0,0)F(d)EB()

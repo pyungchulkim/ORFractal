@@ -2,8 +2,12 @@
  * IT WILL CAUSE A PARSING ERROR.
  */
 corrected rotation: on
-z buffer: off
+
+/* contours may have concave area */
 concave polygons: on
+
+/* z buffer needs to off in transparent mode to see color mixing */
+z buffer: off
 
 /* For some reason, the contour sides get trimmed at higher number
  * when line style is pixel or polygon. Maybe, contour info gets fully
@@ -11,4 +15,8 @@ concave polygons: on
  */
 line style: cylinder
 render mode: shaded
+
+/* viewing control
+ * projection: parallel or perspective
+ */
 projection: parallel
