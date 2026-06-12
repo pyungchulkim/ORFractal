@@ -11,51 +11,63 @@
 ////////////////////////////////////////////////
 
 #define MAX_NODES 		4000	// # of nodes to stop simulation
-#define MAX_ITERATIONS 		4	// # of iteration stop simulation
+#define MAX_ITERATIONS 		2	// # of iteration stop simulation
 #define FOR_ORSTUDIO 		0	// for ORStudio input
 #define CONTOUR_SIDES 		128	// # of sides in a node contour
 #define SEED 			0	// 0 for no seed setting
-#define MODE_CONTOUR		0	// non-zero for contour-only drawing
 #define MODE_TRANSPARENT	1	// non-zero for transparent colors
+#define	COLOR_CAP		10	// [0,16] to cap color from color map
 
 /* Growth types and flags - see description.txt for details */
 #define GT_2D			1	// grow in 2D
-#define F_RESERVED1		0x01
+#define F_LINE			0x01	// line(contour)-only drawing
 #define F_UNIFORM		0x02	// uniform or random fanout (default)
 #define F_HEAD_KEEP		0x04	// head angle: keep the same as mother
 #define F_HEAD_RANDOM		0x08	// or random, or align (default)
 #define F_RESERVED2		0x10	// reserved
 #define F_RESERVED3		0x20	// reserved
 
-/* Genes for a node - dictates how it grows */
+/* Gene for a node - dictates how it grows */
 typedef struct {		
 	int typeGrowth;		// type of node growth such as GROWTH_1
 	int idBaseShape;	// ID for the base contour (2D) or surface (3D) 
 	unsigned flags;		// bit flags 
 	float p1,p2,p3,p4,p5;	// parameters - interpreted by growth type
 	float p6,p7;
-} Genes;
+} Gene;
 
-/* Genes defined. Parameters (p1,p2,...) for each growth types are as follows:
+/* Genes are defined: Parameters (p1,p2,...) for each growth types are as follows:
  * GT_2D: prun, fanouts, angle, rotation, scale, gap, color
  */
-Genes genes[] = {
-  /* 0 */ {GT_2D, 0, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 0.5, 0},
-  /* 1 */ {GT_2D, 1, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.5, 0},
-  /* 2 */ {GT_2D, 2, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.5, 0},
-  /* 3 */ {GT_2D, 3, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.0, 0},
-  /* 4 */ {GT_2D, 4, F_HEAD_KEEP, 0.5, 3, 170, 60, 0.8, 1.0, 0},
-  /* 5 */ {GT_2D, 5, F_HEAD_KEEP, 0.5, 3, 170, 40, 0.8, 1.5, 0},
-  /* 6 */ {GT_2D, 6, F_HEAD_KEEP, 0.5, 3, 170, 40, 0.8, 1.5, 0},
-  /* 7 */ {GT_2D, 3, 0, 0.2, 3, 90, 45, 0.7}
+#define FLAGS_DEFAULT	F_HEAD_KEEP
+Gene genes[] = {
+  /* 0 */ {GT_2D, 0, FLAGS_DEFAULT, 0.5, 3, 170, 30, 0.8, 0.5, 0},
+  /* 1 */ {GT_2D, 1, FLAGS_DEFAULT, 0.5, 3, 170, 40, 0.9, 1.5, 0},
+  /* 2 */ {GT_2D, 2, FLAGS_DEFAULT, 0.5, 3, 170, 30, 0.8, 1.5, 0},
+  /* 3 */ {GT_2D, 3, FLAGS_DEFAULT, 0.5, 3, 170, 30, 0.8, 1.0, 0},
+  /* 4 */ {GT_2D, 4, FLAGS_DEFAULT, 0.2, 2, 170, 30, 0.8, -0.2, 0},
+  /* 5 */ {GT_2D, 5, FLAGS_DEFAULT, 0.2, 2, 170, 20, 0.9, 1.5, 0},
+  /* 6 */ {GT_2D, 6, FLAGS_DEFAULT, 0.2, 2, 170, 30, 0.8, 0.0, 0},
+  /* 6 */ {GT_2D, 7, FLAGS_DEFAULT, 0.2, 2, 170, 30, 0.8, 1.0, 0},
 };
 
-/* Seeding instruction - genes id and # of its seeds within the range */
-#define SEEDING		\
-			Seeding(0, 0, 10, 300, 800) \
-			Seeding(0, 3, 10, 300, 800)
+/* Seeding batch */
+typedef struct {
+	int gid;		// genes id 
+	int nSeeds;		// # of seeds to plant 
+	float initScale;	// initial scale
+} Batch;
 
-#define SEED_COVERAGE	0.5
+Batch batches[] {
+	{0, 4, 700},
+	{1, 5, 1000},
+	{2, 4, 1000},
+	{3, 5, 1500},
+	{4, 8, 1500},
+	{5, 5, 700},
+	{6, 5, 1500},
+	{7, 5, 1200}
+};
 
 /* Macros for genes parameters just for readability */
 #define P_PRUN_RATE	p1
@@ -86,6 +98,7 @@ const float CUBE_DEPTH = 2000.0;	// reference cube depth
 #define ROUND(f)	((int)(f + 0.5f))		// simple round for positive float
 #define MIN(a, b) 	(((a) < (b)) ? (a) : (b))	// pick min
 #define MAX(a, b) 	(((a) > (b)) ? (a) : (b))	// pick max
+#define CAP_COLOR(c) 	while ((c) % 16 > COLOR_CAP) { (c) = (c) % (MAX_COLORS - 1) + 1; }
 
 /////////////////////////////////////////////////////////////
 // Forward declarations of types, functions and modules
@@ -124,7 +137,7 @@ typedef struct {
 } Contour;
 
 /* production rules for LPFG */
-module Seeding(int, int, int, float, float);
+module Seeding();
 module GrowNode(NodeHandle);
 
 module Initialize();
@@ -132,6 +145,7 @@ module DrawNode(NodeHandle);
 module DrawCube(float, float, float);
 
 /* Other functions */
+V3f getVogelSeedCoordinate(int, int);	// get seed coordinate
 float gRandom(float mean, float sd);	// Gaussian dist random generator
 float uRandom(float range);		// Uniform dist random within [-range, range)
 V2f getContourCoord(int idContour, float angle); // get coordinate from a contour
@@ -184,58 +198,59 @@ derivation length: 100000;
 
 Axiom: 	Initialize() // Initialize data structures before production
 	DrawCube(CUBE_WIDTH, CUBE_HEIGHT, CUBE_DEPTH) // reference cube
-	SEEDING;
+	Seeding();
 
 /* Seed initial nodes for the genes.
- *  startIter	- starting iteration (delay)
- *  gid 	- genes id 
- *  nSeeds 	- # of seeds to plant
- *  scaleMin, scaleMax - the coverage from the center of the reference cube
  */
-Seeding(startIter, gid, nSeeds, scaleMin, scaleMax) : 
+Seeding() : 
 {
-  if (startIter > currIteration) return;	// wait until the starting iteration
+  int nTotalSeeds = 0;
+  for (int i = 0; i < DIM(batches); i++)
+    nTotalSeeds += batches[i].nSeeds;
 
-  if (gid < 0 || gid >= DIM(genes)) {
-    Printf("Invalid gid: %d.\n", gid);
-    Stop();
-  }
+  // Flatten to randomize
+  Batch *flatBatches = new Batch[nTotalSeeds];
+  for (int i = 0, c = 0; i < DIM(batches); i++)
+    for (int j = 0; j < batches[i].nSeeds; j++)
+      flatBatches[c++] = batches[i];
 
-  Genes *pGenes = &genes[gid];
+  // Randomize
+  for (int i = nTotalSeeds - 1; i > 0; i--)
+    std::swap(flatBatches[i], flatBatches[(int)ran(i + 1)]);
 
-  for (int i = 0; i < nSeeds; i++) {
-    V3f center = V3f(0, CUBE_HEIGHT / 2, -CUBE_DEPTH / 2);
-    V3f start;
-    float scale = scaleMin + ran(scaleMax - scaleMin);
+  for (int i = 0; i < nTotalSeeds; i++) {
 
-    // Detemine the location and color of the seed node
-    if (nodesCreated == 0) { // first one - put it at the vintage point
-      start = center;
-    } else {
-      start.x = center.x + uRandom(CUBE_WIDTH / 2 * SEED_COVERAGE);
-      start.y = center.y + uRandom(CUBE_HEIGHT / 2 * SEED_COVERAGE);
-      start.z = center.z + uRandom(CUBE_DEPTH / 2 * SEED_COVERAGE);
+    Batch *pBatch = &flatBatches[i];
+    if (pBatch->gid < 0 || pBatch->gid >= DIM(genes)) {
+      Printf("Invalid gid: %d.\n", pBatch->gid);
+      Stop();
     }
+
+    // Detemine the location and initial scale
+    V3f start = getVogelSeedCoordinate(i, nTotalSeeds);
+    float scale = gRandom(pBatch->initScale, pBatch->initScale * 0.2);
 
     // Allocate a node and populate the node specific info
     NodeHandle pNode = NULL;
+    Gene *pGene = &genes[pBatch->gid];
 
-    switch (pGenes->typeGrowth) {
+    switch (pGene->typeGrowth) {
       case GT_2D:
       {
-	Node2D *pn = new Node2D;
+	Node2D* pn = new Node2D;
 	pn->header.id = nodesCreated++;
 	pn->header.birth = currIteration;
 	pn->header.pMother = NULL;
-	pn->header.gid = gid;
+	pn->header.gid = pBatch->gid;
 	pn->start = start;
-	pn->direction.x = (pGenes->flags & F_HEAD_KEEP) ? 0 : ran(360);
-	pn->direction.y = uRandom(pGenes->P_ROTATION);
-	pn->idContour = pGenes->idBaseShape;
+	pn->direction.x = (pGene->flags & F_HEAD_KEEP) ? 0 : ran(360);
+	pn->direction.y = uRandom(pGene->P_ROTATION);
+	pn->idContour = pGene->idBaseShape;
 	pn->scale = scale;
-	pn->color = pGenes->P_COLOR;
+	pn->color = pGene->P_COLOR;
 	if (pn->color == 0)	// unspecified. random pick
 	  pn->color = ran(MAX_COLORS) + 1;
+	CAP_COLOR(pn->color);
 	pNode = pn;
 	break;
       }
@@ -251,7 +266,7 @@ Seeding(startIter, gid, nSeeds, scaleMin, scaleMax) :
     nproduce EB();
   }
 
-  Printf("Seeding(%d,%d) completed.\n", gid, nSeeds); 
+  Printf("Seeding() completed with %d seeds.\n", nTotalSeeds); 
   produce ;
 }
 
@@ -268,25 +283,25 @@ GrowNode(pNode) :
   }
 
   int gid = ((NodeHeader *)pNode)->gid;
-  Genes *pGenes = &genes[gid];
+  Gene *pGene = &genes[gid];
 
   // Grow the node according to the growth type
-  switch (pGenes->typeGrowth) {
+  switch (pGene->typeGrowth) {
 
     case GT_2D: {
 
       Node2D *pThis = (Node2D *)pNode;
 
       // pull out growth parameters specific to the growth types
-      float prunRate = pGenes->P_PRUN_RATE;
-      int nFanouts = pGenes->P_FANOUTS;
-      int angle = pGenes->P_ANGLE;
-      float rotation = pGenes->P_ROTATION;
-      float scaleRate = pGenes->P_SCALE_RATE;
+      float prunRate = pGene->P_PRUN_RATE;
+      int nFanouts = pGene->P_FANOUTS;
+      int angle = pGene->P_ANGLE;
+      float rotation = pGene->P_ROTATION;
+      float scaleRate = pGene->P_SCALE_RATE;
 
       // Generate angles for fanouts
       float *fanouts = new float[nFanouts];
-      if (pGenes->flags & F_UNIFORM) {	// equally distribute at [-angle, angle]
+      if (pGene->flags & F_UNIFORM) {	// equally distribute at [-angle, angle]
 	float curr = (nFanouts <= 1) ? 0 : -angle;
 	float delta = (nFanouts <= 1) ? 360 : (2 * angle) / (nFanouts - 1);
 	for (int i = 0; i < nFanouts; i++, curr += delta) {
@@ -310,9 +325,9 @@ GrowNode(pNode) :
 	pn->header.gid = gid;
 
 	// set the direction and rotation of the node
-	if (pGenes->flags & F_HEAD_KEEP)
+	if (pGene->flags & F_HEAD_KEEP)
 	  pn->direction.x = 0;	 // no change: head angle the same as mother
-	else if (pGenes->flags & F_HEAD_RANDOM)
+	else if (pGene->flags & F_HEAD_RANDOM)
 	  pn->direction.x = ran(360);	// head to random direction
 	else
 	  pn->direction.x = fanouts[i];	// head along the fanout angle
@@ -320,9 +335,10 @@ GrowNode(pNode) :
 
 	pn->idContour = pThis->idContour;
 	pn->scale = pThis->scale * (scaleRate + uRandom(scaleRate * 0.3));
-	pn->color = pGenes->P_COLOR;
+	pn->color = pGene->P_COLOR;
 	if (pn->color == 0)	// unspecified. advance to the next color
 	  pn->color = (pThis->color == MAX_COLORS) ? 1 : pThis->color + 1;
+	CAP_COLOR(pn->color);
 
 	// Calculate the center coordinate of the new node.
 	// The gap is distance between v1 and v2 where v1 is a vertex of
@@ -332,7 +348,7 @@ GrowNode(pNode) :
 	// the mother node and the new node contours.
 
 	V2f v1 = getContourCoord(pThis->idContour, fanouts[i]) * pThis->scale;
-	float gapRate = pGenes->P_GAP_RATE + uRandom(pGenes->P_GAP_RATE * 0.3);
+	float gapRate = pGene->P_GAP_RATE + uRandom(pGene->P_GAP_RATE * 0.3);
 	V2f v2 = v1 * (1 + gapRate);	// move by gap rate
 	float d2 = 180 + fanouts[i] - pn->direction.x;
 	V2f v3 = getContourCoord(pThis->idContour, d2) * pn->scale;
@@ -448,10 +464,10 @@ Initialize() :
 /* Draw the node with the direction and shape information. */
 DrawNode(pNode) : 
 {
-  Genes *pGenes = &genes[((NodeHeader *)pNode)->gid];
+  Gene *pGene = &genes[((NodeHeader *)pNode)->gid];
 
   // Draw the node according to the growth type
-  switch (pGenes->typeGrowth) {
+  switch (pGene->typeGrowth) {
 
     case GT_2D: {	// Use 2D contour to draw the shape
 
@@ -476,8 +492,8 @@ DrawNode(pNode) :
       V2f start = contours[ci].vertices[0] * pThis->scale;
       nproduce Right(90) g(start.x) Left(90) g(start.y);
 
-      // Draw the contour lines
-      if (MODE_CONTOUR) {
+      // Draw the shape
+      if (pGene->flags & F_LINE) {	// line only
 	nproduce SetWidth(5);
 	int nSides = DIM(contours[ci].edges);
 	for (int i = 0; i < nSides; i++) {
@@ -485,7 +501,7 @@ DrawNode(pNode) :
 	  nproduce Left(contours[ci].edges[i].x) F(l);
 	}
       }
-      else {
+      else {	// ploygon
 	nproduce SP();
 	int nSides = DIM(contours[ci].edges);
 	for (int i = 0; i < nSides; i++) {
@@ -527,6 +543,44 @@ DrawCube(w,h,d) :
 ////////////////////////////////////////////////
 // My Own Functions
 ////////////////////////////////////////////////
+
+/* Calculates the coordinate for a seed using the Vogel-Spiral method.
+ * Note that only <x,y> is generated. Z is assigned a random value.
+ */
+V3f getVogelSeedCoordinate(int index, int totalSeeds)
+{
+  V3f p;
+
+  // The first seed is to be placed at the center as vintage point
+  if (index == 0)
+    return V3f(0, CUBE_HEIGHT / 2, -CUBE_DEPTH / 2);
+
+  // Calculate Golden Angle rotation (approx. 137.5 degrees in radians)
+  const float GOLDEN_ANGLE = 2.399963229728653;
+  float theta = index * GOLDEN_ANGLE;
+
+  // Calculate dynamic radius based on the square root of the index
+  float maxRadius = sqrt(pow(CUBE_WIDTH, 2) + pow(CUBE_HEIGHT, 2)) / 2;
+  float spacingFactor = maxRadius / sqrt(totalSeeds - 1);
+  float r = spacingFactor * sqrt(index);
+
+  // Generate raw circular spiral coordinates centered at (0,0)
+  float rawX = r * std::cos(theta);
+  float rawY = r * std::sin(theta);
+
+  // Apply random jitter within the spacing factor
+  float jitterAngle = ran(2.0 * M_PI);
+  float jitterRadius = ran(spacingFactor);
+  rawX += jitterRadius * std::cos(jitterAngle);
+  rawY += jitterRadius * std::sin(jitterAngle);
+
+  // Shift coordinates so they are offset from the center of the reference cube
+  p.x = rawX;
+  p.y = (CUBE_HEIGHT / 2.0) + rawY;
+  p.z = ran(-CUBE_DEPTH);
+
+  return p;
+}
 
 /* Gaussian distribution random number using Box-Muller transformation. */
 float gRandom(float mean, float sd)

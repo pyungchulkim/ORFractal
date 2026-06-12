@@ -6,4 +6,4 @@ lsys.dll: lsys.o
 
 lsys.o: lsys.i
 	@echo Compiling lsys.i
-	$(COMPILER) -c lsys.i -o lsys.o
+	$(COMPILER) -std=c++11 -c lsys.i -o lsys.o
